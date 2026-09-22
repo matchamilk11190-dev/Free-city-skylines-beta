@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mini Cities 3D - Three.js</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a2a3a;
+            color: #fff;
+            user-select: none;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+        #hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.75);
+            padding: 15px 25px;
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
+            display: flex;
+            gap: 25px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+        }
+        .stat-label {
+            font-size: 11px;
+            color: #aaa;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .stat-value {
+            font-size: 22px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        #toolbar {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.75);
+            padding: 12px 20px;
+            border-radius: 16px;
+            backdrop-filter: blur(10px);
+            display: flex;
+            gap: 10px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+        .tool-btn {
+            background: #2a2a2a;
+            color: white;
+            border: 2px solid transparent;
+            padding: 10px 16px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 13px;
+            transition: all 0.2s ease;
+        }
+        .tool-btn:hover {
+            background: #3a3a3a;
+            transform: translateY(-2px);
+        }
+        .tool-btn.active {
+            background: #2196F3;
+            border-color: #64B5F6;
+            box-shadow: 0 0 15px rgba(33, 150, 243, 0.5);
+        }
+        #instructions {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 12px 18px;
+            border-radius: 10px;
+            font-size: 12px;
+            color: #ccc;
+            pointer-events: none;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    
+    <div id="hud">
+        <div class="stat-item">
+            <span class="stat-label">Dân số</span>
+            <span class="stat-value" id="pop-val">0</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-label">Ngân sách</span>
+            <span class="stat-value" id="money-val" style="color: #FFD700;">$10,000</span>
+        </div>
+    </div>
+
+    <div id="instructions">
+        <b>Xoay:</b> Giữ chuột phải + kéo<br>
+        <b>Zoom:</b> Cuộn chuột<br>
+        <b>Pan:</b> Giữ chuột giữa / Shift + kéo
+    </div>
+
+    <div id="toolbar">
+        <button class="tool-btn active" data-tool="road">🛣️ Đường (-$100)</button>
+        <button class="tool-btn" data-tool="residential">🏡 Dân cư (-$300)</button>
+        <button class="tool-btn" data-tool="commercial">🏢 Thương mại (-$500)</button>
+        <button class="tool-btn" data-tool="industrial">🏭 Công nghiệp (-$400)</button>
+        <button class="tool-btn" data-tool="bulldoze">🚜 Phá hủy (+$50)</button>
+    </div>
+
+    <!-- Three.js & OrbitControls CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <script>
+        // Cấu hình game
+        const GRID_SIZE = 25;
+        const CELL_SIZE = 2;
+        let money = 10000;
+        let currentTool = 'road';
+        const gridData = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null));
+        const gridObjects = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null));
+
+        // Setup Scene & Camera
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x132230);
+        scene.fog = new THREE.FogExp2(0x132230, 0.018);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(GRID_SIZE * 0.8, 30, GRID_SIZE * 1.3);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        container.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.maxPolarAngle = Math.PI / 2.1;
+        controls.minDistance = 10;
+        controls.maxDistance = 70;
+        controls.target.set(GRID_SIZE/2 * CELL_SIZE, 0, GRID_SIZE/2 * CELL_SIZE);
+
+        // Ánh sáng PBR môi trường
+        const ambientLight = new THREE.AmbientLight(0xdff9fb, 0.65);
+        scene.add(ambientLight);
+
+        const sunLight = new THREE.DirectionalLight(0xfff5e6, 1.3);
+        sunLight.position.set(35, 55, 25);
+        sunLight.castShadow = true;
+        sunLight.shadow.mapSize.width = 2048;
+        sunLight.shadow.mapSize.height = 2048;
+        sunLight.shadow.camera.near = 0.5;
+        sunLight.shadow.camera.far = 150;
+        const d = 32;
+        sunLight.shadow.camera.left = -d;
+        sunLight.shadow.camera.right = d;
+        sunLight.shadow.camera.top = d;
+        sunLight.shadow.camera.bottom = -d;
+        scene.add(sunLight);
+
+        // Mặt đất
+        const totalSize = GRID_SIZE * CELL_SIZE;
+        const groundGeo = new THREE.PlaneGeometry(totalSize + 20, totalSize + 20);
+        const groundMat = new THREE.MeshStandardMaterial({ color: 0x243b2b, roughness: 0.95 });
+        const ground = new THREE.Mesh(groundGeo, groundMat);
+        ground.rotation.x = -Math.PI / 2;
+        ground.position.set(totalSize/2 - CELL_SIZE/2, -0.02, totalSize/2 - CELL_SIZE/2);
+        ground.receiveShadow = true;
+        scene.add(ground);
+
+        // Grid lines hỗ trợ nhìn không gian
+        const gridHelper = new THREE.GridHelper(totalSize, GRID_SIZE, 0x3d5a45, 0x2d4433);
+        gridHelper.position.set(totalSize/2 - CELL_SIZE/2, 0, totalSize/2 - CELL_SIZE/2);
+        scene.add(gridHelper);
+
+        // Ghost preview khi hover chuột
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        const ghostGeo = new THREE.BoxGeometry(CELL_SIZE * 0.92, 0.15, CELL_SIZE * 0.92);
+        const ghostMat = new THREE.MeshBasicMaterial({ color: 0x64B5F6, transparent: true, opacity: 0.45 });
+        const hoverMesh = new THREE.Mesh(ghostGeo, ghostMat);
+        hoverMesh.visible = false;
+        scene.add(hoverMesh);
+
+        // Vật liệu kiến trúc
+        const materials = {
+            road: new THREE.MeshStandardMaterial({ color: 0x3b3b3b, roughness: 0.8 }),
+            residential: new THREE.MeshStandardMaterial({ color: 0x66bb6a, roughness: 0.4 }),
+            commercial: new THREE.MeshStandardMaterial({ color: 0x42a5f5, roughness: 0.2, metalness: 0.3 }),
+            industrial: new THREE.MeshStandardMaterial({ color: 0xffb74d, roughness: 0.6 })
+        };
+
+        // UI Toolbar events
+        const toolBtns = document.querySelectorAll('.tool-btn');
+        toolBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                toolBtns.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentTool = btn.dataset.tool;
+            });
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        });
+
+        // Xử lý click xây/xóa
+        window.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            if (e.clientY > window.innerHeight - 90 && e.clientX > window.innerWidth / 2 - 250 && e.clientX < window.innerWidth / 2 + 250) return;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObject(ground);
+            if (intersects.length > 0) {
+                const point = intersects[0].point;
+                const gx = Math.round(point.x / CELL_SIZE);
+                const gz = Math.round(point.z / CELL_SIZE);
+
+                if (gx >= 0 && gx < GRID_SIZE && gz >= 0 && gz < GRID_SIZE) {
+                    handleGridAction(gx, gz);
+                }
+            }
+        });
+
+        function handleGridAction(gx, gz) {
+            const costMap = { road: 100, residential: 300, commercial: 500, industrial: 400 };
+            
+            if (currentTool === 'bulldoze') {
+                if (gridData[gx][gz]) {
+                    scene.remove(gridObjects[gx][gz]);
+                    gridObjects[gx][gz] = null;
+                    gridData[gx][gz] = null;
+                    money += 50;
+                    updateHUD();
+                }
+            } else {
+                const cost = costMap[currentTool];
+                if (money >= cost && !gridData[gx][gz]) {
+                    money -= cost;
+                    gridData[gx][gz] = currentTool;
+                    createBuildingModel(gx, gz, currentTool);
+                    updateHUD();
+                }
+            }
+        }
+
+        function createBuildingModel(gx, gz, type) {
+            const xPos = gx * CELL_SIZE;
+            const zPos = gz * CELL_SIZE;
+            let group = new THREE.Group();
+
+            if (type === 'road') {
+                const geo = new THREE.BoxGeometry(CELL_SIZE, 0.04, CELL_SIZE);
+                const mesh = new THREE.Mesh(geo, materials.road);
+                mesh.receiveShadow = true;
+                group.add(mesh);
+            } else {
+                // Đế nền nhà
+                const baseGeo = new THREE.BoxGeometry(CELL_SIZE * 0.9, 0.1, CELL_SIZE * 0.9);
+                const baseMat = new THREE.MeshStandardMaterial({ color: 0x555555, roughness: 0.9 });
+                const base = new THREE.Mesh(baseGeo, baseMat);
+                base.position.y = 0.05;
+                base.receiveShadow = true;
+                group.add(base);
+
+                // Khối công trình
+                let h = 0.8;
+                let scaleW = 0.7;
+                if (type === 'residential') h = 0.7 + Math.random() * 0.9;
+                if (type === 'commercial') h = 1.6 + Math.random() * 2.0;
+                if (type === 'industrial') { h = 0.9 + Math.random() * 0.5; scaleW = 0.85; }
+
+                const bGeo = new THREE.BoxGeometry(CELL_SIZE * scaleW, h, CELL_SIZE * scaleW);
+                const bMesh = new THREE.Mesh(bGeo, materials[type]);
+                bMesh.position.y = 0.1 + h/2;
+                bMesh.castShadow = true;
+                bMesh.receiveShadow = true;
+                group.add(bMesh);
+
+                // Thêm chi tiết nhỏ (mái / ống khói công nghiệp)
+                if (type === 'industrial') {
+                    const stackGeo = new THREE.CylinderGeometry(0.08, 0.12, 1.2, 8);
+                    const stackMat = new THREE.MeshStandardMaterial({ color: 0x888888 });
+                    const stack = new THREE.Mesh(stackGeo, stackMat);
+                    stack.position.set(0.3, 0.1 + h + 0.6, 0.3);
+                    stack.castShadow = true;
+                    group.add(stack);
+                }
+            }
+
+            group.position.set(xPos, 0, zPos);
+            scene.add(group);
+            gridObjects[gx][gz] = group;
+        }
+
+        function updateHUD() {
+            let population = 0;
+            for(let x=0; x<GRID_SIZE; x++) {
+                for(let z=0; z<GRID_SIZE; z++) {
+                    if(gridData[x][z] === 'residential') population += 6;
+                    if(gridData[x][z] === 'commercial') population += 2;
+                }
+            }
+            document.getElementById('pop-val').innerText = population;
+            document.getElementById('money-val').innerText = '$' + money.toLocaleString();
+        }
+
+        // Mô hình kinh tế tự động (thuế định kỳ mỗi 3s)
+        setInterval(() => {
+            let income = 0;
+            for(let x=0; x<GRID_SIZE; x++) {
+                for(let z=0; z<GRID_SIZE; z++) {
+                    if(gridData[x][z] === 'residential') income += 3;
+                    if(gridData[x][z] === 'commercial') income += 14;
+                    if(gridData[x][z] === 'industrial') income += 20;
+                }
+            }
+            money += income;
+            updateHUD();
+        }, 3000);
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Main Loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Cập nhật vị trí ghost preview
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObject(ground);
+            if (intersects.length > 0) {
+                const point = intersects.point;
+                const gx = Math.round(point.x / CELL_SIZE);
+                const gz = Math.round(point.z / CELL_SIZE);
+                if (gx >= 0 && gx < GRID_SIZE && gz >= 0 && gz < GRID_SIZE) {
+                    hoverMesh.position.set(gx * CELL_SIZE, 0.1, gz * CELL_SIZE);
+                    hoverMesh.visible = true;
+                } else {
+                    hoverMesh.visible = false;
+                }
+            } else {
+                hoverMesh.visible = false;
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        updateHUD();
+        animate();
+    </script>
+</body>
+</html>
